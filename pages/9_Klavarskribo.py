@@ -43,23 +43,53 @@ def is_black(midi: int) -> bool:
 # Klavarskribo renderer (matplotlib)
 # ---------------------------------------------------------------------------
 
-def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
-    """notes: list of (start_in_quarters, duration_in_quarters, midi_pitch, hand).
+def render_klavar(
+    notes,
+    quarters_per_measure=4,
+    row_height=0.55,
+    beams=None,
+    title=None,
+    dynamics=None,
+    show_octave_labels=False,
+    show_beat_ticks=False,
+    show_measure_numbers=True,
+    show_clef=False,
+    oct_gap=0.3,
+):
+    """Render a Klavarskribo score from `notes`.
+
+    Parameters
+    ----------
+    notes : list of (start_in_quarters, duration_in_quarters, midi_pitch, hand)
+        Hand is 'L' or 'R'.
+    beams : list of list of int, optional
+        Each entry is a list of indices into `notes` that should be beamed
+        together. All notes within a single beam group must share the same
+        hand. Beamed notes do not get an individual duration line; the beam
+        itself indicates the rhythmic grouping.
+    title : str, optional       Italic tempo/title text printed above the staff.
+    dynamics : list of (start_in_quarters, str), optional
+        Dynamic markings (e.g. "p", "f") placed at the given time in the
+        left margin.
+    show_octave_labels : bool   Print "c1", "c2", … above each C.
+    show_beat_ticks    : bool   Small tick marks for sub-measure beats.
+    show_measure_numbers : bool Number every measure down the left edge.
+    show_clef : bool            Diamond octave-clef marker on the left.
+    oct_gap : float             Extra horizontal space inserted at every
+                                B–C octave boundary (in semitone units).
 
     Klavarskribo conventions used here:
       - Vertical staff lines at the **five black-key positions** per octave,
         in 2 + 3 groups (C#/D#  and  F#/G#/A#).
       - White-key notes sit in the spaces (open circles); black-key notes
         sit on a line (filled circles).
-      - **Extra horizontal gap between B and C of consecutive octaves**,
-        so octaves are visibly separated.
       - **Time** flows top-to-bottom. Bar lines are horizontal **dashed**
-        lines drawn only at measure boundaries. Individual beats are not
-        drawn across the staff — small ticks sit in the left margin.
-      - Every note has a short **horizontal stem** that indicates the hand:
-        **left-going stem = left hand**, **right-going stem = right hand**.
-        A thin vertical line extending downward from the note head shows
-        the note's duration.
+        lines drawn only at measure boundaries.
+      - Every note has a short **horizontal stem** that indicates the hand
+        (left = LH, right = RH). The stem is tangent to the **top edge** of
+        a white head and to the **bottom edge** of a black head, so open
+        circles hang from the stem and filled circles sit on top of it.
+      - Beamed groups share a thick line connecting the outer stem ends.
     """
     fig, ax = plt.subplots(figsize=(6, 6))
 
@@ -76,14 +106,9 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
     while max_p % 12 != 11:          # snap to B
         max_p += 1
 
-    # x-mapping: 1 unit per semitone, plus an extra 0.7 of empty space at
-    # every octave boundary (between B and the next C) to make octaves
-    # visually distinct.
-    OCT_GAP = 0.7
-
     def x_of(midi):
         rel = midi - min_p
-        return rel + (rel // 12) * OCT_GAP
+        return rel + (rel // 12) * oct_gap
 
     x_left = x_of(min_p) - 0.8
     x_right = x_of(max_p) + 0.8
@@ -115,69 +140,123 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
                 color="black", linewidth=0.8,
                 linestyle=(0, (5, 3)), zorder=1)
 
-    # Tiny beat tick marks in the left margin only (no full beat lines)
-    for m in range(n_measures):
-        for b in range(1, int(quarters_per_measure)):
-            y = -(m * quarters_per_measure + b)
-            ax.plot([bar_x0 - 0.6, bar_x0 - 0.15], [y, y],
-                    color="gray", linewidth=0.5, zorder=1)
+    if show_beat_ticks:
+        for m in range(n_measures):
+            for b in range(1, int(quarters_per_measure)):
+                y = -(m * quarters_per_measure + b)
+                ax.plot([bar_x0 - 0.6, bar_x0 - 0.15], [y, y],
+                        color="gray", linewidth=0.5, zorder=1)
 
-    # Octave name labels (c1, c2, …) at the top, above each C
-    for midi in range(min_p, max_p + 1):
-        if midi % 12 == 0:
-            octave = midi // 12 - 1
-            ax.text(x_of(midi), y_top + 0.55, f"c{octave}",
-                    ha="center", va="bottom",
-                    fontsize=8, color="dimgray", style="italic")
+    if show_octave_labels:
+        for midi in range(min_p, max_p + 1):
+            if midi % 12 == 0:
+                octave = midi // 12 - 1
+                ax.text(x_of(midi), y_top + 0.55, f"c{octave}",
+                        ha="center", va="bottom",
+                        fontsize=8, color="dimgray", style="italic")
 
-    # Measure numbers down the left edge
-    for m in range(n_measures):
-        y = -m * quarters_per_measure - quarters_per_measure / 2
-        ax.text(bar_x0 - 1.2, y, str(m + 1),
-                ha="right", va="center", fontsize=9, color="dimgray")
+    if show_measure_numbers:
+        for m in range(n_measures):
+            y = -m * quarters_per_measure - quarters_per_measure / 2
+            ax.text(bar_x0 - 1.2, y, str(m + 1),
+                    ha="right", va="center", fontsize=9, color="dimgray")
 
-    # Notes
-    radius = 0.55              # bigger heads — note heads dominate Klavar
-    stem_len = 1.6             # horizontal hand-stem length
-    for start, dur, midi, hand in notes:
-        x = x_of(midi)
-        y_center = -start                       # note head sits AT the onset
-        top_edge = y_center + radius
-        bottom_edge = y_center - radius
+    if title:
+        ax.text(bar_x0, y_top + 1.0, title,
+                ha="left", va="bottom", fontsize=11, style="italic")
 
+    if show_clef:
+        # Diamond octave-clef marker just before the first bar, centred on
+        # middle C if it is in range, otherwise on the lowest C visible.
+        anchor_midi = 60 if min_p <= 60 <= max_p else (min_p + (-min_p) % 12)
+        cx = x_of(anchor_midi)
+        cy = y_top + 0.1
+        d = 0.5
+        ax.plot([cx, cx + d, cx, cx - d, cx],
+                [cy + d, cy, cy - d, cy, cy + d],
+                color="black", linewidth=1.0, zorder=4)
+        ax.add_patch(Circle((cx, cy), d * 0.22,
+                            facecolor="white", edgecolor="black",
+                            linewidth=1.0, zorder=5))
+
+    if dynamics:
+        for t, label in dynamics:
+            ax.text(bar_x0 - 0.3, -t, label,
+                    ha="right", va="center",
+                    fontsize=12, style="italic", weight="bold")
+
+    # --- Note geometry ----------------------------------------------------
+    radius = 0.55
+    stem_len = 1.6
+
+    # Pre-compute per-note tangent y and default stem-end x
+    n = len(notes)
+    stem_y = [0.0] * n
+    stem_end_x = [0.0] * n
+    for i, (start, _dur, midi, hand) in enumerate(notes):
+        y_center = -start
         black = is_black(midi)
-        # Klavar convention: white notes hang from the top of the stem,
-        # black notes sit on top of the stem. So the stem is tangent to
-        # the top edge of a white head and to the bottom edge of a black head.
-        y_stem = bottom_edge if black else top_edge
+        stem_y[i] = (y_center - radius) if black else (y_center + radius)
+        x = x_of(midi)
+        if hand == "R":
+            stem_end_x[i] = x + stem_len
+        elif hand == "L":
+            stem_end_x[i] = x - stem_len
+        else:
+            stem_end_x[i] = x
 
-        # Horizontal hand stem — left = LH, right = RH.
-        # Drawn purely horizontal, starting at the tangent point on the head.
-        if hand == "L":
-            ax.plot([x, x - stem_len], [y_stem, y_stem],
+    # If beams are specified, stretch each beamed note's stem so they all
+    # end at the same outer x, and remember which notes are beamed so we
+    # skip their individual duration line.
+    beamed_idx = set()
+    if beams:
+        for group in beams:
+            if not group:
+                continue
+            beamed_idx.update(group)
+            hand = notes[group[0]][3]
+            xs = [x_of(notes[i][2]) for i in group]
+            if hand == "R":
+                beam_x = max(xs) + stem_len
+            else:
+                beam_x = min(xs) - stem_len
+            ys = [stem_y[i] for i in group]
+            ax.plot([beam_x, beam_x], [min(ys), max(ys)],
+                    color="black", linewidth=3.0,
+                    solid_capstyle="butt", zorder=2)
+            for i in group:
+                stem_end_x[i] = beam_x
+
+    # --- Draw notes -------------------------------------------------------
+    for i, (start, dur, midi, hand) in enumerate(notes):
+        x = x_of(midi)
+        y_center = -start
+        bottom_edge = y_center - radius
+        sy = stem_y[i]
+
+        # Horizontal hand stem (purely horizontal)
+        if hand in ("L", "R"):
+            ax.plot([x, stem_end_x[i]], [sy, sy],
                     color="black", linewidth=1.6,
                     solid_capstyle="butt", zorder=2)
-        elif hand == "R":
-            ax.plot([x, x + stem_len], [y_stem, y_stem],
-                    color="black", linewidth=1.6,
-                    solid_capstyle="butt", zorder=2)
 
-        # Vertical duration line — starts at the bottom of the head (so it
-        # doesn't run through the circle) and extends to the note's end.
-        dur_end = -(start + dur)
-        if bottom_edge - dur_end > 0.05:
-            ax.plot([x, x], [bottom_edge, dur_end],
-                    color="black", linewidth=1.3,
-                    solid_capstyle="butt", zorder=2)
+        # Vertical duration line — skip if the note is beamed (the beam
+        # already conveys the rhythmic value), and skip for very short notes.
+        if i not in beamed_idx:
+            dur_end = -(start + dur)
+            if bottom_edge - dur_end > 0.25:
+                ax.plot([x, x], [bottom_edge, dur_end],
+                        color="black", linewidth=1.3,
+                        solid_capstyle="butt", zorder=2)
 
         # Note head
-        face = "black" if black else "white"
+        face = "black" if is_black(midi) else "white"
         ax.add_patch(Circle((x, y_center), radius,
                             facecolor=face, edgecolor="black",
                             linewidth=1.4, zorder=3))
 
     ax.set_xlim(bar_x0 - 2.2, bar_x1 + stem_len + 0.6)
-    ax.set_ylim(y_bottom - 0.8, y_top + 1.4)
+    ax.set_ylim(y_bottom - 0.8, y_top + (1.8 if title else 1.4))
     ax.set_aspect("equal")
     ax.set_xticks([])
     ax.set_yticks([])
