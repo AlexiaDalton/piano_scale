@@ -54,7 +54,7 @@ def render_klavar(
     show_beat_ticks=False,
     show_measure_numbers=True,
     show_clef=False,
-    oct_gap=0.3,
+    oct_gap=0.0,
 ):
     """Render a Klavarskribo score from `notes`.
 
@@ -122,28 +122,43 @@ def render_klavar(
     y_top = 0.0
     y_bottom = -total_time
 
-    # Vertical staff lines at every black key (2+3 per octave)
+    # Vertical staff lines at every black key (5 per octave in 2+3 groups).
+    # The C# and D# of the middle-C octave (MIDI 61 and 63) are drawn as
+    # DOTTED lines instead of solid — this is the standard Klavar reference
+    # marker so a player can locate middle C at a glance.
     for midi in range(min_p, max_p + 1):
         if (midi % 12) in BLACK_PCS:
             x = x_of(midi)
+            is_middle_ref = midi in (61, 63)
             ax.plot([x, x], [y_top, y_bottom],
-                    color="black", linewidth=0.8, zorder=1)
+                    color="black",
+                    linewidth=0.9,
+                    linestyle=(0, (1, 2.5)) if is_middle_ref else "-",
+                    zorder=1)
 
-    # Bar lines — dashed horizontal lines at measure boundaries only
+    # Beat lines: dotted horizontal lines indicating each count within a bar.
+    # Lighter than the bar lines so the bar structure stays readable.
     bar_x0 = x_of(min_p) - 0.5
     bar_x1 = x_of(max_p) + 0.5
+    beat = 0.0
+    while beat < total_time - 1e-6:
+        if abs(beat - round(beat / quarters_per_measure) * quarters_per_measure) > 1e-6:
+            y = -beat
+            ax.plot([bar_x0, bar_x1], [y, y],
+                    color="gray", linewidth=0.4,
+                    linestyle=(0, (1, 4)), zorder=1)
+        beat += 1.0
+
+    # Bar lines: short solid horizontal stubs in the LEFT margin at each
+    # measure boundary. Klavar uses these short marks (not full-width
+    # lines) to indicate bar divisions; full-width lines would clash with
+    # the staff lines that dominate the page.
     for m in range(n_measures + 1):
         y = -m * quarters_per_measure
-        ax.plot([bar_x0, bar_x1], [y, y],
-                color="black", linewidth=0.8,
-                linestyle=(0, (5, 3)), zorder=1)
-
-    if show_beat_ticks:
-        for m in range(n_measures):
-            for b in range(1, int(quarters_per_measure)):
-                y = -(m * quarters_per_measure + b)
-                ax.plot([bar_x0 - 0.6, bar_x0 - 0.15], [y, y],
-                        color="gray", linewidth=0.5, zorder=1)
+        ax.plot([bar_x0 - 1.0, bar_x0 - 0.05], [y, y],
+                color="black", linewidth=1.4, zorder=1)
+        ax.plot([bar_x1 + 0.05, bar_x1 + 1.0], [y, y],
+                color="black", linewidth=1.4, zorder=1)
 
     if show_octave_labels:
         for midi in range(min_p, max_p + 1):
