@@ -44,7 +44,17 @@ def is_black(midi: int) -> bool:
 # ---------------------------------------------------------------------------
 
 def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
-    """notes: list of (start_in_quarters, duration_in_quarters, midi_pitch)."""
+    """notes: list of (start_in_quarters, duration_in_quarters, midi_pitch).
+
+    Layout follows the Klavarskribo convention:
+      - 12 equal-width semitone columns per octave (horizontal axis = piano keys)
+      - Vertical staff lines at the **black-key** positions, grouped 2 + 3
+        (C#/D#  and  F#/G#/A#) — exactly the 2-3 pattern of a piano keyboard
+      - White-key notes sit *between* lines (open circles), black-key notes
+        sit *on* a line (filled circles)
+      - Time flows top-to-bottom; thin dotted lines mark beats, solid lines
+        mark bar lines; measure numbers run down the left edge.
+    """
     fig, ax = plt.subplots(figsize=(6, 6))
 
     if not notes:
@@ -55,63 +65,83 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
     pitches = [n[2] for n in notes]
     min_p = min(pitches) - 3
     max_p = max(pitches) + 3
-    while min_p % 12 != 0:
+    while min_p % 12 != 0:           # snap to C
         min_p -= 1
-    while max_p % 12 != 11:
+    while max_p % 12 != 11:          # snap to B
         max_p += 1
 
     max_time = max(s + d for s, d, _ in notes)
     n_measures = int(max_time / quarters_per_measure) + 1
     total_time = n_measures * quarters_per_measure
 
-    width = max(4, (max_p - min_p + 2) * 0.22)
+    width = max(4, (max_p - min_p + 2) * 0.28)
     height = max(4, total_time * row_height + 1)
     fig.set_size_inches(width, height)
 
-    # Vertical staff lines at piano black-key gaps
-    for midi in range(min_p, max_p + 2):
-        pc = midi % 12
-        if pc == 5:  # E-F gap
-            ax.axvline(midi - 0.5, color="black", linewidth=0.7, zorder=1)
-        elif pc == 0:  # B-C gap (octave)
-            ax.axvline(midi - 0.5, color="black", linewidth=1.3, zorder=1)
+    y_top = 0.0
+    y_bottom = -total_time
 
-    # Horizontal beat & measure lines
+    # Vertical staff lines = the 5 black keys per octave, in 2+3 groups
+    for midi in range(min_p, max_p + 1):
+        if (midi % 12) in BLACK_PCS:
+            ax.plot([midi, midi], [y_top, y_bottom],
+                    color="black", linewidth=0.7, zorder=1)
+
+    # Small tick at each octave divider (between B and C) to anchor the eye
+    for midi in range(min_p, max_p + 2):
+        if midi % 12 == 0:  # C
+            ax.plot([midi - 0.5, midi - 0.5], [y_top, y_top + 0.35],
+                    color="black", linewidth=1.0, zorder=1)
+            ax.plot([midi - 0.5, midi - 0.5], [y_bottom, y_bottom - 0.35],
+                    color="black", linewidth=1.0, zorder=1)
+
+    # Beat and bar lines (horizontal)
     beat = 0
     while beat <= total_time + 1e-6:
         y = -beat
         if abs(beat % quarters_per_measure) < 1e-6:
-            ax.axhline(y, color="black", linewidth=1.1, zorder=1)
+            ax.plot([min_p - 0.5, max_p + 0.5], [y, y],
+                    color="black", linewidth=1.0, zorder=1)
         else:
-            ax.axhline(y, color="gray", linewidth=0.35,
-                       linestyle=(0, (1, 3)), zorder=1)
+            ax.plot([min_p - 0.5, max_p + 0.5], [y, y],
+                    color="gray", linewidth=0.35,
+                    linestyle=(0, (1, 3)), zorder=1)
         beat += 1
 
-    # C-octave labels
+    # Octave name labels (c1, c2, …) at the top, on each C
     for midi in range(min_p, max_p + 1):
         if midi % 12 == 0:
             octave = midi // 12 - 1
-            ax.text(midi, 0.6, f"C{octave}", ha="center", va="bottom",
-                    fontsize=8, color="dimgray")
+            ax.text(midi, y_top + 0.55, f"c{octave}",
+                    ha="center", va="bottom",
+                    fontsize=8, color="dimgray", style="italic")
+
+    # Measure numbers down the left edge
+    for m in range(n_measures):
+        y = -m * quarters_per_measure - quarters_per_measure / 2
+        ax.text(min_p - 1.1, y, str(m + 1),
+                ha="right", va="center", fontsize=9, color="dimgray")
 
     # Notes
     radius = 0.42
     for start, dur, midi in notes:
         x = midi
-        y_top = -start
-        y_bot = -(start + dur)
+        y_note = -start
+        y_end = -(start + dur)
 
+        # Duration stem (extends downward from the note head)
         if dur > 0.05:
-            ax.plot([x, x], [y_top, y_bot], color="black", linewidth=2.5,
+            ax.plot([x, x], [y_note - radius * 0.2, y_end],
+                    color="black", linewidth=1.4,
                     solid_capstyle="butt", zorder=2)
 
         face = "black" if is_black(midi) else "white"
-        ax.add_patch(Circle((x, y_top), radius,
+        ax.add_patch(Circle((x, y_note), radius,
                             facecolor=face, edgecolor="black",
-                            linewidth=1.3, zorder=3))
+                            linewidth=1.2, zorder=3))
 
-    ax.set_xlim(min_p - 0.8, max_p + 0.8)
-    ax.set_ylim(-total_time - 0.5, 1.6)
+    ax.set_xlim(min_p - 1.8, max_p + 0.8)
+    ax.set_ylim(y_bottom - 0.8, y_top + 1.4)
     ax.set_aspect("equal")
     ax.set_xticks([])
     ax.set_yticks([])
