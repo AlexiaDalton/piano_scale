@@ -138,33 +138,41 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
 
     # Notes
     radius = 0.55              # bigger heads — note heads dominate Klavar
-    stem_len = 1.05            # horizontal hand-stem length
+    stem_len = 1.6             # horizontal hand-stem length
     for start, dur, midi, hand in notes:
         x = x_of(midi)
-        y_note = -start
-        y_end = -(start + dur)
+        y_center = -start                       # note head sits AT the onset
+        top_edge = y_center + radius
+        bottom_edge = y_center - radius
 
-        # Vertical duration line (drawn first so the head covers its top end)
-        if dur > 0.05:
-            ax.plot([x, x], [y_note, y_end],
-                    color="black", linewidth=1.3,
-                    solid_capstyle="butt", zorder=2)
+        black = is_black(midi)
+        # Klavar convention: white notes hang from the top of the stem,
+        # black notes sit on top of the stem. So the stem is tangent to
+        # the top edge of a white head and to the bottom edge of a black head.
+        y_stem = bottom_edge if black else top_edge
 
-        # Horizontal hand stem — left = LH, right = RH
+        # Horizontal hand stem — left = LH, right = RH.
+        # Drawn purely horizontal, starting at the tangent point on the head.
         if hand == "L":
-            ax.plot([x - radius * 0.85, x - radius - stem_len],
-                    [y_note, y_note],
+            ax.plot([x, x - stem_len], [y_stem, y_stem],
                     color="black", linewidth=1.6,
                     solid_capstyle="butt", zorder=2)
         elif hand == "R":
-            ax.plot([x + radius * 0.85, x + radius + stem_len],
-                    [y_note, y_note],
+            ax.plot([x, x + stem_len], [y_stem, y_stem],
                     color="black", linewidth=1.6,
                     solid_capstyle="butt", zorder=2)
 
+        # Vertical duration line — starts at the bottom of the head (so it
+        # doesn't run through the circle) and extends to the note's end.
+        dur_end = -(start + dur)
+        if bottom_edge - dur_end > 0.05:
+            ax.plot([x, x], [bottom_edge, dur_end],
+                    color="black", linewidth=1.3,
+                    solid_capstyle="butt", zorder=2)
+
         # Note head
-        face = "black" if is_black(midi) else "white"
-        ax.add_patch(Circle((x, y_note), radius,
+        face = "black" if black else "white"
+        ax.add_patch(Circle((x, y_center), radius,
                             facecolor=face, edgecolor="black",
                             linewidth=1.4, zorder=3))
 
