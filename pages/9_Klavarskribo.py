@@ -191,7 +191,11 @@ def render_klavar(
 
     # --- Note geometry ----------------------------------------------------
     radius = 0.45               # smaller heads, like printed Klavar
-    stem_len = 0.7              # short, like printed Klavar
+    # Stems are substantial in printed Klavar — for isolated notes this is
+    # the full hand-stem length; for beamed notes the leftmost stem ends
+    # `stem_len` past the rightmost note (so the stems naturally have
+    # varying lengths depending on how close each note is to the beam).
+    stem_len = 1.4
 
     # Stems attach at the note centre (the equator of the circle) and run
     # purely horizontally outward. This matches the cleaner look of printed
