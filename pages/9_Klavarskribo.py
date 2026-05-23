@@ -99,12 +99,10 @@ def render_klavar(
         return fig
 
     pitches = [n[2] for n in notes]
-    min_p = min(pitches) - 3
-    max_p = max(pitches) + 3
-    while min_p % 12 != 0:           # snap to C
-        min_p -= 1
-    while max_p % 12 != 11:          # snap to B
-        max_p += 1
+    # Snap to the octave boundaries that contain the lowest and highest note,
+    # without extra padding — printed Klavar shows only the relevant octaves.
+    min_p = (min(pitches) // 12) * 12              # C of lowest note's octave
+    max_p = ((max(pitches) // 12) + 1) * 12 - 1     # B of highest note's octave
 
     def x_of(midi):
         rel = midi - min_p
@@ -166,37 +164,43 @@ def render_klavar(
                 ha="left", va="bottom", fontsize=11, style="italic")
 
     if show_clef:
-        # Diamond octave-clef marker just before the first bar, centred on
-        # middle C if it is in range, otherwise on the lowest C visible.
+        # Diamond octave-clef marker before the first bar, centred on
+        # middle C (or the nearest visible C). Small "o" inside marks
+        # the reference octave.
         anchor_midi = 60 if min_p <= 60 <= max_p else (min_p + (-min_p) % 12)
         cx = x_of(anchor_midi)
-        cy = y_top + 0.1
-        d = 0.5
+        cy = y_top + 0.5
+        d = 0.45
         ax.plot([cx, cx + d, cx, cx - d, cx],
                 [cy + d, cy, cy - d, cy, cy + d],
                 color="black", linewidth=1.0, zorder=4)
-        ax.add_patch(Circle((cx, cy), d * 0.22,
+        ax.add_patch(Circle((cx, cy), d * 0.25,
                             facecolor="white", edgecolor="black",
-                            linewidth=1.0, zorder=5))
+                            linewidth=0.9, zorder=5))
 
     if dynamics:
+        # Place dynamics inside the staff area, just below middle C, at the
+        # given onset time. Matches how printed Klavar tucks dynamics next
+        # to the notes rather than in a separate margin.
+        anchor_midi = 60 if min_p <= 60 <= max_p else min_p
+        dyn_x = x_of(anchor_midi) - 1.2
         for t, label in dynamics:
-            ax.text(bar_x0 - 0.3, -t, label,
+            ax.text(dyn_x, -t - 0.2, label,
                     ha="right", va="center",
                     fontsize=12, style="italic", weight="bold")
 
     # --- Note geometry ----------------------------------------------------
-    radius = 0.55
-    stem_len = 1.6
+    radius = 0.45               # smaller heads, like printed Klavar
+    stem_len = 0.7              # short, like printed Klavar
 
-    # Pre-compute per-note tangent y and default stem-end x
+    # Stems attach at the note centre (the equator of the circle) and run
+    # purely horizontally outward. This matches the cleaner look of printed
+    # Klavar — beams in a group will then line up with the actual note
+    # positions on the time axis instead of zig-zagging by note colour.
     n = len(notes)
-    stem_y = [0.0] * n
+    stem_y = [-notes[i][0] for i in range(n)]
     stem_end_x = [0.0] * n
-    for i, (start, _dur, midi, hand) in enumerate(notes):
-        y_center = -start
-        black = is_black(midi)
-        stem_y[i] = (y_center - radius) if black else (y_center + radius)
+    for i, (_start, _dur, midi, hand) in enumerate(notes):
         x = x_of(midi)
         if hand == "R":
             stem_end_x[i] = x + stem_len
@@ -206,8 +210,7 @@ def render_klavar(
             stem_end_x[i] = x
 
     # If beams are specified, stretch each beamed note's stem so they all
-    # end at the same outer x, and remember which notes are beamed so we
-    # skip their individual duration line.
+    # reach the same outer x, and draw the beam itself.
     beamed_idx = set()
     if beams:
         for group in beams:
@@ -222,7 +225,7 @@ def render_klavar(
                 beam_x = min(xs) - stem_len
             ys = [stem_y[i] for i in group]
             ax.plot([beam_x, beam_x], [min(ys), max(ys)],
-                    color="black", linewidth=3.0,
+                    color="black", linewidth=2.2,
                     solid_capstyle="butt", zorder=2)
             for i in group:
                 stem_end_x[i] = beam_x
@@ -234,17 +237,19 @@ def render_klavar(
         bottom_edge = y_center - radius
         sy = stem_y[i]
 
-        # Horizontal hand stem (purely horizontal)
+        # Horizontal hand stem — starts at the side of the head and extends
+        # outward (to the beam end if beamed, otherwise stem_len away).
         if hand in ("L", "R"):
-            ax.plot([x, stem_end_x[i]], [sy, sy],
+            edge_x = x + (radius if hand == "R" else -radius)
+            ax.plot([edge_x, stem_end_x[i]], [sy, sy],
                     color="black", linewidth=1.6,
                     solid_capstyle="butt", zorder=2)
 
-        # Vertical duration line — skip if the note is beamed (the beam
-        # already conveys the rhythmic value), and skip for very short notes.
+        # Vertical duration line — only for unbeamed notes longer than a
+        # half note (beamed notes get rhythm from the beam itself).
         if i not in beamed_idx:
             dur_end = -(start + dur)
-            if bottom_edge - dur_end > 0.25:
+            if bottom_edge - dur_end > 0.6:
                 ax.plot([x, x], [bottom_edge, dur_end],
                         color="black", linewidth=1.3,
                         solid_capstyle="butt", zorder=2)
