@@ -44,7 +44,7 @@ def is_black(midi: int) -> bool:
 # ---------------------------------------------------------------------------
 
 def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
-    """notes: list of (start_in_quarters, duration_in_quarters, midi_pitch).
+    """notes: list of (start_in_quarters, duration_in_quarters, midi_pitch, hand).
 
     Klavarskribo conventions used here:
       - Vertical staff lines at the **five black-key positions** per octave,
@@ -56,6 +56,10 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
       - **Time** flows top-to-bottom. Bar lines are horizontal **dashed**
         lines drawn only at measure boundaries. Individual beats are not
         drawn across the staff — small ticks sit in the left margin.
+      - Every note has a short **horizontal stem** that indicates the hand:
+        **left-going stem = left hand**, **right-going stem = right hand**.
+        A thin vertical line extending downward from the note head shows
+        the note's duration.
     """
     fig, ax = plt.subplots(figsize=(6, 6))
 
@@ -84,11 +88,11 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
     x_left = x_of(min_p) - 0.8
     x_right = x_of(max_p) + 0.8
 
-    max_time = max(s + d for s, d, _ in notes)
+    max_time = max(s + d for s, d, _, _ in notes)
     n_measures = int(max_time / quarters_per_measure) + 1
     total_time = n_measures * quarters_per_measure
 
-    width = max(4, (x_right - x_left + 2) * 0.28)
+    width = max(4, (x_right - x_left + 2) * 0.32)
     height = max(4, total_time * row_height + 1)
     fig.set_size_inches(width, height)
 
@@ -133,24 +137,38 @@ def render_klavar(notes, quarters_per_measure=4, row_height=0.55):
                 ha="right", va="center", fontsize=9, color="dimgray")
 
     # Notes
-    radius = 0.42
-    for start, dur, midi in notes:
+    radius = 0.55              # bigger heads — note heads dominate Klavar
+    stem_len = 1.05            # horizontal hand-stem length
+    for start, dur, midi, hand in notes:
         x = x_of(midi)
         y_note = -start
         y_end = -(start + dur)
 
-        # Duration stem (extends downward from the note head)
+        # Vertical duration line (drawn first so the head covers its top end)
         if dur > 0.05:
-            ax.plot([x, x], [y_note - radius * 0.2, y_end],
-                    color="black", linewidth=1.4,
+            ax.plot([x, x], [y_note, y_end],
+                    color="black", linewidth=1.3,
                     solid_capstyle="butt", zorder=2)
 
+        # Horizontal hand stem — left = LH, right = RH
+        if hand == "L":
+            ax.plot([x - radius * 0.85, x - radius - stem_len],
+                    [y_note, y_note],
+                    color="black", linewidth=1.6,
+                    solid_capstyle="butt", zorder=2)
+        elif hand == "R":
+            ax.plot([x + radius * 0.85, x + radius + stem_len],
+                    [y_note, y_note],
+                    color="black", linewidth=1.6,
+                    solid_capstyle="butt", zorder=2)
+
+        # Note head
         face = "black" if is_black(midi) else "white"
         ax.add_patch(Circle((x, y_note), radius,
                             facecolor=face, edgecolor="black",
-                            linewidth=1.2, zorder=3))
+                            linewidth=1.4, zorder=3))
 
-    ax.set_xlim(bar_x0 - 2.0, bar_x1 + 0.5)
+    ax.set_xlim(bar_x0 - 2.2, bar_x1 + stem_len + 0.6)
     ax.set_ylim(y_bottom - 0.8, y_top + 1.4)
     ax.set_aspect("equal")
     ax.set_xticks([])
@@ -190,11 +208,13 @@ def parse_duration(tok):
         return 1.0
 
 
-def parse_simple_text(text):
+def parse_simple_text(text, hand="R"):
     """Tokens: `<pitch> <dur>`, `r <dur>` for a rest, `[C4,E4,G4] <dur>` for a chord.
 
     `|` separates measures (visual only). Pitches like `C4`, `C#4`, `Db4`,
     `F##5`. Durations: w/h/q/e/s/t or a number in quarter-notes.
+
+    All notes parsed from this text are tagged with `hand` ('L' or 'R').
     """
     notes = []
     t = 0.0
@@ -217,7 +237,7 @@ def parse_simple_text(text):
             d = parse_duration(tokens[i])
             for p in chord:
                 if p is not None:
-                    notes.append((t, d, p))
+                    notes.append((t, d, p, hand))
             t += d
         elif tok.lower() in ("r", "rest"):
             i += 1
@@ -231,7 +251,7 @@ def parse_simple_text(text):
                 break
             d = parse_duration(tokens[i])
             if p is not None:
-                notes.append((t, d, p))
+                notes.append((t, d, p, hand))
             t += d
         i += 1
     return notes
@@ -264,13 +284,19 @@ def parse_musicxml_bytes(data: bytes):
     notes = []
     quarters_per_measure = 4.0
 
-    # MusicXML has parts; iterate every part and merge — Klavar shows all hands together.
-    for part in root.findall(".//part"):
+    # MusicXML has parts; iterate every part. For piano scores the two
+    # staves of a single part carry the hand assignment via <staff>:
+    # staff 1 = right hand, staff 2 = left hand.
+    parts = root.findall(".//part")
+    for part_idx, part in enumerate(parts):
         current = 0.0
         divisions = 1
         prev_dur = 0.0
         beats = 4
         beat_unit = 4
+        # If a score has two separate parts (e.g. a duet) and no <staff>
+        # tags, treat the first part as RH, second as LH.
+        default_hand = "R" if part_idx == 0 else "L"
 
         for measure in part.findall("measure"):
             attrs = measure.find("attributes")
@@ -294,6 +320,11 @@ def parse_musicxml_bytes(data: bytes):
                     is_rest = elem.find("rest") is not None
                     is_chord = elem.find("chord") is not None
                     pe = elem.find("pitch")
+                    se = elem.find("staff")
+                    if se is not None:
+                        hand = "L" if int(se.text) >= 2 else "R"
+                    else:
+                        hand = default_hand
 
                     start = current - prev_dur if is_chord else current
 
@@ -303,7 +334,7 @@ def parse_musicxml_bytes(data: bytes):
                         ae = pe.find("alter")
                         alter = int(ae.text) if ae is not None else 0
                         midi = STEP_PC[step] + alter + (octave + 1) * 12
-                        notes.append((start, dur_q, midi))
+                        notes.append((start, dur_q, midi, hand))
 
                     if not is_chord:
                         current += dur_q
@@ -323,16 +354,26 @@ def parse_musicxml_bytes(data: bytes):
 # UI
 # ---------------------------------------------------------------------------
 
-EXAMPLE_FUR_ELISE = (
+EXAMPLE_SCALE_RH = (
+    "C4 q D4 q E4 q F4 q | G4 q A4 q B4 q C5 q | "
+    "[C4,E4,G4] h [F4,A4,C5] h | [G4,B4,D5] h [C4,E4,G4] h"
+)
+EXAMPLE_SCALE_LH = (
+    "C3 h G3 h | C3 h G3 h | "
+    "C3 h F3 h | G3 h C3 h"
+)
+
+EXAMPLE_FUR_ELISE_RH = (
     "E5 e D#5 e E5 e D#5 e E5 e B4 e D5 e C5 e A4 q "
     "r e C4 e E4 e A4 e B4 q "
     "r e E4 e G#4 e B4 e C5 q "
     "r e E4 e E5 e D#5 e E5 e D#5 e E5 e B4 e D5 e C5 e A4 q"
 )
-
-EXAMPLE_SCALE = (
-    "C4 q D4 q E4 q F4 q | G4 q A4 q B4 q C5 q | "
-    "[C4,E4,G4] h [F4,A4,C5] h | [G4,B4,D5] h [C4,E4,G4] h"
+EXAMPLE_FUR_ELISE_LH = (
+    "r q r q r q "
+    "A2 e E3 e A3 e r q r q "
+    "E2 e E3 e G#3 e r q r q "
+    "A2 e E3 e A3 e r q r q r q r q"
 )
 
 mode = st.radio(
@@ -355,17 +396,29 @@ if mode == "Simple text":
 - **Rests**: `r q`
 - **Chords**: `[C4,E4,G4] q`
 - `|` is an optional bar separator.
+
+The right-hand and left-hand fields are rendered together; each note
+gets a horizontal stem in its hand's direction
+(right-going = RH, left-going = LH).
 """
         )
-    text = st.text_area("Notes:", value=EXAMPLE_SCALE, height=140)
+    col_rh, col_lh = st.columns(2)
+    with col_rh:
+        rh_text = st.text_area("Right hand", value=EXAMPLE_SCALE_RH, height=160)
+    with col_lh:
+        lh_text = st.text_area("Left hand", value=EXAMPLE_SCALE_LH, height=160)
     qpm = float(st.number_input("Quarter notes per measure", 1, 16, 4))
-    if text.strip():
-        notes = parse_simple_text(text)
+    notes = []
+    if rh_text.strip():
+        notes += parse_simple_text(rh_text, hand="R")
+    if lh_text.strip():
+        notes += parse_simple_text(lh_text, hand="L")
 
 elif mode == "MusicXML upload":
     st.markdown(
         "MusicXML is the standard interchange format for sheet music — exportable "
-        "from MuseScore, Sibelius, Finale, Dorico, Logic, etc."
+        "from MuseScore, Sibelius, Finale, Dorico, Logic, etc. "
+        "For piano scores the upper staff is taken as right hand, the lower as left hand."
     )
     uploaded = st.file_uploader(
         "Upload MusicXML",
@@ -381,10 +434,12 @@ elif mode == "MusicXML upload":
             st.error(f"Could not parse the file: {e}")
 
 elif mode == "Example: scale + chords":
-    notes = parse_simple_text(EXAMPLE_SCALE)
+    notes = (parse_simple_text(EXAMPLE_SCALE_RH, hand="R")
+             + parse_simple_text(EXAMPLE_SCALE_LH, hand="L"))
 
 else:  # Für Elise
-    notes = parse_simple_text(EXAMPLE_FUR_ELISE)
+    notes = (parse_simple_text(EXAMPLE_FUR_ELISE_RH, hand="R")
+             + parse_simple_text(EXAMPLE_FUR_ELISE_LH, hand="L"))
     qpm = 3.0  # 3/8 — display 3 quarters per "measure" for a rough fit
 
 row_h = st.slider("Vertical scale", 0.25, 1.2, 0.55, 0.05,
